@@ -1,0 +1,68 @@
+--- 원본/app/main.py
++++ 반영/app/main.py
+@@ -17,6 +17,7 @@
+ from app.problem.routers import problem
+ from app.problem_ref.routers import problem_ref
+ from app.inputdata.routers import inputdata
++from app.inputdata.intake.router import router as intake_router
+ from app.submission.routers import submission
+ from app.comment.routers import comment
+ from app.code_logs.routers import code_logs
+@@ -187,6 +188,7 @@
+ app.include_router(problem.router,       prefix="/api", tags=["problem"])
+ app.include_router(problem_ref.router,   prefix="/api", tags=["problem_ref"])
+ app.include_router(inputdata.router,     prefix="/api", tags=["inputdata"])
++app.include_router(intake_router,        prefix="/api", tags=["inputdata_intake"])
+ app.include_router(submission.router,    prefix="/api", tags=["submission"])
+ app.include_router(comment.router,       prefix="/api", tags=["comment"])
+ app.include_router(code_logs.router,     prefix="/api", tags=["code_logs"])
+
+--- 원본/app/database.py
++++ 반영/app/database.py
+@@ -80,6 +80,7 @@
+     from app.workbook_class_week.models.class_week import ClassWeek
+     from app.ai_logging.models.ai_request_log import AIRequestLog
+     from app.inquiry.models.inquiry import Inquiry, InquiryAttachment, InquiryManager, InquiryApiKey
++    from app.inputdata.intake.models import IntakeJob, IntakeItem, IntakeCapture, ProblemTitleSeq  # 문제지 업로드(intake) 표
+ 
+     max_retries = 10
+     for attempt in range(max_retries):
+
+--- 원본/requirements.txt
++++ 반영/requirements.txt
+@@ -73,3 +73,8 @@
+ google-auth
+ apscheduler
+ prometheus-fastapi-instrumentator
++# 문제지 업로드(intake): 워드·엑셀·한글·그림 읽기 (Python 3.11 호환)
++python-docx>=1.1,<2
++openpyxl>=3.1,<4
++olefile>=0.47
++Pillow>=10
+
+--- 원본/Dockerfile
++++ 반영/Dockerfile
+@@ -21,7 +21,7 @@
+     libncurses5-dev libncursesw5-dev libreadline-dev \
+     libxml2-dev libxslt1-dev libjson-c-dev \
+     uuid-dev libedit-dev \
+-    curl tzdata gosu \
++    curl tzdata gosu poppler-utils \
+     fonts-nanum fonts-nanum-extra \
+  && ln -snf /usr/share/zoneinfo/Asia/Seoul /etc/localtime \
+  && echo "Asia/Seoul" > /etc/timezone \
+@@ -61,6 +61,14 @@
+ 
+ ENV TZ=Asia/Seoul
+ 
++# ── 문제지 업로드(intake): 원본 캡처용 LibreOffice (워드·PPT·한글을 쪽 이미지로 바꿈) ──
++# 이미지가 약 500MB 커진다. 필요 없으면 빌드할 때 --build-arg INSTALL_OFFICE=false (그러면 PDF 만 캡처하고 나머지는 읽은 글로 보여 줌)
++ARG INSTALL_OFFICE=true
++RUN if [ "$INSTALL_OFFICE" = "true" ]; then \
++      apt-get update && apt-get install -y --no-install-recommends libreoffice-writer libreoffice-impress \
++      && rm -rf /var/lib/apt/lists/*; \
++    fi
++
+ # ── 권한 격하 (UID 1000) ───────────────────────────────────
+ RUN groupadd -g 1000 appuser || true && \
+     useradd -u 1000 -g appuser -m -s /bin/bash appuser || true

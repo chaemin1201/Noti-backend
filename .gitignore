@@ -1,0 +1,15 @@
+# 비밀 값
+.env
+.env.*
+!.env.example
+
+# 파이썬·맥 압축 찌꺼기
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+__MACOSX/
+
+# 로컬 테스트 DB
+*.db
+*.sqlite3
