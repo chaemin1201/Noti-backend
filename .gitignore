@@ -49,3 +49,6 @@ htmlcov/
 ~$*
 Thumbs.db
 desktop.ini
+app_수정부분.md
+deploy/
+.claude/
