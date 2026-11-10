@@ -1,7 +1,7 @@
 # 비밀 값
 .env
 .env.*
-!.env.example
+.env.example
 
 # 파이썬·맥 압축 찌꺼기
 __pycache__/
@@ -12,4 +12,40 @@ __MACOSX/
 
 # 로컬 테스트 DB
 *.db
+*.sqlite
 *.sqlite3
+*-journal
+
+# 배포·전달용으로 만든 산출물 (코드에서 다시 만들 수 있음)
+*.zip
+aprofi_*
+inputdata_구조설명서.*
+프론트_전달문서*
+문제등록_화면시안*
+
+# 시험을 돌리면 생기는 결과 파일
+noti_test/결과.json
+noti_test/결과_보고서.html
+noti_test/테스트결과.md
+noti_test/e2e_result*.json
+noti_test/*_result.json
+
+# 로컬 편집기·도구 설정
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# 가상환경·빌드·측정 찌꺼기
+.venv/
+venv/
+*.egg-info/
+.coverage
+htmlcov/
+
+# 로그·임시 파일·운영체제 찌꺼기
+*.log
+*.tmp
+*.bak
+~$*
+Thumbs.db
+desktop.ini
