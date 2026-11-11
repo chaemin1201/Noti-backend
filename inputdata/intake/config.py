@@ -21,9 +21,7 @@ def _flag(name, default="off"):
 
 
 def exec_enabled():
-    """정답 코드를 서버에서 실행해 검증할지. AI 가 쓴 코드를 실행하므로 기본은 끔(off).
-    INTAKE_EXEC=on 만으로는 켜지지 않는다. 격리된 컨테이너(네트워크 차단, 읽기 전용 파일시스템, 비루트)에서
-    돌리고 있음을 운영자가 INTAKE_EXEC_ISOLATED=on 으로 함께 확인해야 한다. 한쪽만 켜면 실행 검증은 꺼진 채로 둔다."""
+    """정답 코드를 서버에서 실행해 검증할지. AI 가 쓴 코드를 실행하므로 기본은 끔(off)."""
     return _flag("INTAKE_EXEC") and _flag("INTAKE_EXEC_ISOLATED")
 
 
@@ -73,8 +71,7 @@ def repair_rounds():
 
 
 def call_deadline():
-    """AI 호출 하나를 기다리는 시간(초). 정상 호출은 25초 안에 끝나는데 가끔 한 호출이 몇 분씩 멈춘다(작업 전체가 그 호출을 기다림).
-    넘으면 그 요청은 버리고 같은 요청을 한 번 더 보낸다(헤징). 0 이면 끔."""
+    """AI 호출 하나를 기다리는 시간(초). 정상 호출은 25초 안에 끝나는데 가끔 한 호출이 몇 분씩 멈춘다(작업 전체가 그 호출을 기다림)."""
     return max(0, _int("INTAKE_CALL_DEADLINE", 40))
 
 
@@ -121,14 +118,12 @@ def light_rows():
 
 
 def batch_size():
-    """같은 종류의 짧은 문제를 이 개수씩 한 번의 AI 호출로 묶는다 (같은 프롬프트를 되풀이해 보내는 입력 토큰이 줄어든다). 1 이면 묶지 않는다(기본).
-    묶으면 앞 문제 내용이 섞일 수 있어 실제 AI 로 결과를 비교한 뒤 켠다. 예: INTAKE_BATCH=3"""
+    """같은 종류의 짧은 문제를 이 개수씩 한 번의 AI 호출로 묶는다 (같은 프롬프트를 되풀이해 보내는 입력 토큰이 줄어든다). 1 이면 묶지 않는다(기본)."""
     return max(1, min(8, _int("INTAKE_BATCH", 1)))
 
 
 def whole_doc():
-    """문제 번호·제목을 찾지 못한 문서(번호가 글에 없는 한글 .hwpx 등)를 거절하지 않고, 문서 전체를 한 번에 보내 AI 가 문제 단위로 나누게 한다. 기본은 끔
-    (긴 문서는 출력이 길어지고 나누기가 틀릴 수 있어 사람이 결과를 확인해야 한다). INTAKE_WHOLE_DOC=on 으로 켠다."""
+    """문제 번호·제목을 찾지 못한 문서(번호가 글에 없는 한글 .hwpx 등)를 거절하지 않고, 문서 전체를 한 번에 보내 AI 가 문제 단위로 나누게 한다. 기본은 끔"""
     return _flag("INTAKE_WHOLE_DOC", "off")
 
 
@@ -147,14 +142,12 @@ def scan_chunk():
 
 
 def warmup():
-    """같은 프롬프트로 처리할 문제가 4개 이상이면 첫 문제를 혼자 먼저 처리해 AI 서비스의 프롬프트 캐시를 데운 뒤 나머지를 동시에 처리한다.
-    동시에 시작하면 모두 캐시 없이 전체 입력 요금이 든다(측정: 캐시가 없을 때 동시 4건 중 대부분이 0 적중, 데운 뒤에는 입력의 98% 적중). INTAKE_WARMUP=off 로 끈다."""
+    """같은 프롬프트로 처리할 문제가 4개 이상이면 첫 문제를 혼자 먼저 처리해 AI 서비스의 프롬프트 캐시를 데운 뒤 나머지를 동시에 처리한다."""
     return _flag("INTAKE_WARMUP", "on")
 
 
 def ai_answer_review():
-    """AI 가 직접 푼 객관식·단답형 정답(손으로 따라간 값이라 실행으로 확인할 수 없고 틀릴 수 있음)을 승인 대기로 보낼지. 기본 켬.
-    승인할 문제가 너무 많아지면 INTAKE_AI_ANSWER_REVIEW=off 로 끄면 예전처럼 자동 등록하고 사후 점검 표시(ai_filled)만 남긴다."""
+    """AI 가 직접 푼 객관식·단답형 정답(손으로 따라간 값이라 실행으로 확인할 수 없고 틀릴 수 있음)을 승인 대기로 보낼지. 기본 켬."""
     return _flag("INTAKE_AI_ANSWER_REVIEW", "on")
 
 
@@ -171,6 +164,11 @@ def daily_jobs():
 def redact_pii():
     """AI 서비스로 보내기 전에 개인정보(학번·이름 칸, 전화번호, 이메일, 주민등록번호)를 지울지. 기본 켬. INTAKE_REDACT_PII=off 로 끈다."""
     return _flag("INTAKE_REDACT_PII", "on")
+
+
+def fill_cond():
+    """코딩·디버깅 문제의 조건 2개 제안과 추가 테스트 케이스 제안을 짧은 호출에서도 AI 에게 묻는가. INTAKE_FILL_COND=off 로 끈다 (호출 수·비용을 줄일 때)."""
+    return _flag("INTAKE_FILL_COND", "on")
 
 
 def fill_meta():

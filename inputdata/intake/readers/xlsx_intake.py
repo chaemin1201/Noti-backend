@@ -1,10 +1,4 @@
-"""엑셀로 정리된 문제를 읽어 문제(행) 하나씩의 레코드로 만들고, 등록 필수 항목이 비어 있는지 점검한다.
-
-- 머리글 행을 자동으로 찾고, 열 이름이 달라도(이름/문제 이름, 정답코드/정답 코드 …) 같은 항목으로 묶는다.
-- 출력(JSONL, 한 줄에 문제 하나) 은 AI 에게 한 줄씩 넣는 입력이 된다:
-    {"source": "파일", "row": 행번호, "fields": {"이름": ..., "설명": ...}, "intake": {점검 결과}}
-- intake 의 점검은 단순 규칙(코드)이 하는 것이고, 의미 판단(조건 태그, 방식 분할, 조언)은 AI 몫이다.
-"""
+"""엑셀로 정리된 문제를 읽어 문제(행) 하나씩의 레코드로 만들고, 등록 필수 항목이 비어 있는지 점검한다."""
 import json, re
 
 
@@ -155,8 +149,7 @@ def _db_value(v):
 
 
 def _worksheet_rows(conn, path, names):
-    """학습지를 문제(problems: 문제 번호·구분·문장)와 줄(problem_lines: 요구사항·제공 코드·정답 코드·실행 결과를 한 줄씩), 그림(problem_images)으로 나눠 담은 DB 를 읽는다.
-    문제 하나가 행 하나가 된다. 이름은 문서 제목의 앞부분 + 문제 번호(예: 'C++ 06 클래스와객체' 의 3번 → C++_06_03), 줄은 종류별로 조건·제공코드·정답코드·출력 칸에 모은다."""
+    """학습지를 문제(problems: 문제 번호·구분·문장)와 줄(problem_lines: 요구사항·제공 코드·정답 코드·실행 결과를 한 줄씩), 그림(problem_images)으로 나눠 담은 DB 를 읽는다."""
     from pathlib import Path
     if not {"problems", "problem_lines"} <= set(names): return []
     cols = lambda tb: [r[1] for r in conn.execute(f"PRAGMA table_info({tb})")]
@@ -191,8 +184,7 @@ def _worksheet_rows(conn, path, names):
 
 
 def read_sqlite(path):
-    """SQLite 파일(.db/.sqlite/.sqlite3)의 표를 엑셀처럼 읽는다. 이름·설명에 해당하는 열이 있는 표만 문제 표로 본다 (뷰는 같은 데이터가 중복되고 무거운 계산이 숨을 수 있어 읽지 않는다).
-    올라온 DB 는 믿을 수 없으므로 읽기 전용으로 열고, 쓰기를 막고, 실행 시간과 행 수를 제한한다. (확장 기능 불러오기는 기본으로 꺼져 있다)"""
+    """SQLite 파일(.db/.sqlite/.sqlite3)의 표를 엑셀처럼 읽는다. 이름·설명에 해당하는 열이 있는 표만 문제 표로 본다 (뷰는 같은 데이터가 중복되고 무거운 계산이 숨을 수 있어 읽지 않는다)."""
     import sqlite3, time
     from pathlib import Path
     with open(path, "rb") as fh:
@@ -254,8 +246,7 @@ def read_csv(path):
 
 
 def sheet_text(path, limit=300_000):
-    """머리글(이름·설명 열)이 없는 자유 형식 엑셀·CSV 의 모든 칸을 문서처럼 읽는다. 행마다 한 줄이고 칸 사이는 공백 3개이다 (워드 표와 같은 약속).
-    시트가 여럿이면 시트 이름을 제목 줄로 넣는다. 빈 칸·빈 행은 건너뛰고, 글자 수가 limit 을 넘으면 거기서 자른다."""
+    """머리글(이름·설명 열)이 없는 자유 형식 엑셀·CSV 의 모든 칸을 문서처럼 읽는다. 행마다 한 줄이고 칸 사이는 공백 3개이다 (워드 표와 같은 약속)."""
     lines = []
     if str(path).lower().endswith((".csv", ".tsv", ".tab")):
         for r in _csv_rows(path):

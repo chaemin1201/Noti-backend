@@ -1,12 +1,5 @@
 # app/inputdata/intake/readers/capture.py
-"""원본 캡처: 올린 문서를 쪽 이미지로 만들어, 문제마다 그 문제가 있는 쪽의 이미지를 짝지어 준다 (승인 화면 왼쪽에 '원본 그대로' 보여 주기 위해).
-
-  PDF                       → 그대로 쪽 이미지로 (poppler pdftoppm 또는 pypdfium2)
-  워드·PPT·한글 (.docx .pptx .ppt .hwp .hwpx) → LibreOffice 로 PDF 로 바꾼 뒤 쪽 이미지로 (LibreOffice 가 없으면 건너뜀: 읽은 글로 대신 보여 줌)
-  엑셀·csv·md·txt          → 캡처하지 않는다 (엑셀은 열 값 표, 글 파일은 글 그대로 보여 주는 것이 낫다)
-
-문제 ↔ 쪽 짝짓기: 문제 원문(원본조각)의 첫 줄·끝 줄을 쪽마다의 글에서 찾는다 (문서에는 믿을 만한 쪽 번호가 없다).
-캡처는 AI 처리와 따로(백그라운드) 만든다. 이 파일은 동기 함수이므로 호출하는 쪽에서 스레드로 돌린다."""
+"""원본 캡처: 올린 문서를 쪽 이미지로 만들어, 문제마다 그 문제가 있는 쪽의 이미지를 짝지어 준다 (승인 화면 왼쪽에 '원본 그대로' 보여 주기 위해)."""
 import io
 import os
 import re
@@ -18,7 +11,7 @@ from pathlib import Path
 from . import pdf_intake
 
 SUPPORTED = (".pdf", ".docx", ".pptx", ".ppt", ".hwp", ".hwpx")
-MAX_SPAN = 3                              # 한 문제에 붙이는 쪽 수 (문제가 여러 쪽에 걸쳐도 앞 3쪽까지)
+MAX_SPAN = 4                              # 한 문제에 붙이는 쪽 수 (문제가 여러 쪽에 걸쳐도 앞 4쪽까지)
 JPEG_MAX = (1000, 1400)
 
 
@@ -64,22 +57,33 @@ def pages_text(pdf):
     return parts
 
 
-def find_pages(text, ptexts, max_span=MAX_SPAN):
-    """문제 원문 text 가 있는 쪽 번호 목록 (1부터). 첫 줄들이 처음 나오는 쪽부터 끝 줄들이 나오는 쪽까지 (최대 max_span 쪽). 못 찾으면 []."""
-    lines = [l for l in (_c(x) for x in str(text or "").split("\n")) if len(l) >= 8]
-    if not lines or not ptexts: return []
-    pc = [_c(t) for t in ptexts]
-    start = None
+def _start_page(lines, pc):
+    """문제의 첫 줄들이 처음 나오는 쪽 번호(0부터)와 그 쪽 글 안의 위치. 못 찾으면 (None, 0)."""
     for ln in lines[:3]:
         for i, t in enumerate(pc):
-            if ln[:30] in t: start = i if start is None else min(start, i); break
-        if start is not None: break
+            k = t.find(ln[:30])
+            if k >= 0: return i, k
+    return None, 0
+
+
+def find_pages(text, ptexts, max_span=MAX_SPAN, next_text=None):
+    """문제 원문 text 가 있는 쪽 번호 목록 (1부터). 첫 줄이 처음 나오는 쪽부터 끝 줄이 나오는 쪽까지 (최대 max_span 쪽). 못 찾으면 []."""
+    lines = [l for l in (_c(x) for x in str(text or "").split(chr(10))) if len(l) >= 8]
+    if not lines or not ptexts: return []
+    pc = [_c(t) for t in ptexts]
+    start, _ = _start_page(lines, pc)
     if start is None: return []
+    last = min(len(pc) - 1, start + max_span - 1)
     end = start
-    for ln in reversed(lines[-3:]):
-        for i in range(len(pc) - 1, start - 1, -1):
-            if ln[-30:] in pc[i]: end = max(end, i); break
-    end = min(end, start + max_span - 1)
+    for ln in reversed(lines[-5:]):                                        # 끝 줄들: 줄 끝 또는 줄 앞부분이 나오는 가장 뒤쪽
+        hit = [i for i in range(start, last + 1) if ln[-30:] in pc[i] or ln[:30] in pc[i]]
+        if hit: end = max(end, hit[-1]); break
+    nxt = [l for l in (_c(x) for x in str(next_text or "").split(chr(10))) if len(l) >= 8]
+    if nxt and end == start:                                               # 끝 줄이 첫 쪽에서만 보이면, 다음 문제가 뒤쪽에서 시작하는지로 한 번 더 판단
+        ns, pos = _start_page(nxt, pc)
+        if ns is not None and ns > start:
+            end = max(end, ns if pos > 40 else ns - 1)
+    end = min(end, last)
     return list(range(start + 1, end + 2))
 
 
@@ -95,8 +99,7 @@ def jpeg_of(pdf, page, dpi=100, n_pages=None):
 
 
 def capture(files, records, max_pages=40, dpi=100, render=None):
-    """files: [(표시 이름, 확장자(.docx), 바이트)], records: 문제 레코드 목록. render 는 시험용으로 jpeg_of 를 바꿔 끼우는 자리.
-    {"status": "done|none|unsupported", "captures": [{"file","page","mime","data"}], "map": {문제 key: [{"file","page"}]}, "unsupported": [표시 이름]}"""
+    """files: [(표시 이름, 확장자(.docx), 바이트)], records: 문제 레코드 목록. render 는 시험용으로 jpeg_of 를 바꿔 끼우는 자리."""
     render = render or jpeg_of
     unsupported, docs = [], []
     with tempfile.TemporaryDirectory() as d:
@@ -113,10 +116,11 @@ def capture(files, records, max_pages=40, dpi=100, render=None):
         want, rec_pages = [], {}                                  # want: 그릴 (파일, 쪽) 순서, rec_pages: 문제 → [(파일, 쪽)]
         pdf_labels = {l for l, e, _ in files if (e or "").lower() == ".pdf"}
         only_pdf = [x for x in docs if x[0] in pdf_labels]                                  # 올린 파일 중 PDF 인 것
-        for rec in records:
+        for n, rec in enumerate(records):
             hit = None
+            nxt = records[n + 1].get("원본조각") if n + 1 < len(records) else None          # 다음 문제가 시작하는 쪽이 이 문제의 끝 단서
             for label, pdf, texts in docs:
-                pg = find_pages(rec.get("원본조각"), texts)
+                pg = find_pages(rec.get("원본조각"), texts, next_text=nxt)
                 if pg: hit = (label, pg); break
             if not hit and rec.get("원본형식") == "PDF" and len(only_pdf) == 1:             # 글을 못 찾은 PDF(스캔 등)는 레코드가 아는 쪽 번호를 쓴다
                 try: hit = (only_pdf[0][0], [int(rec.get("page"))])

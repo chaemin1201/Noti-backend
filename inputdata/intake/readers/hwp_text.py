@@ -1,12 +1,4 @@
-"""한글 문서(.hwp / .hwpx)를 본문 순서대로 텍스트로 만든다. (pdf_intake.read_text 가 부른다)
-
-- .hwpx: zip 안의 Contents/sectionN.xml 을 읽는다. 표는 워드(docx_text)와 같게 행마다 칸을 공백 3개로 잇고, 칸이 하나면 줄을 유지한다.
-- .hwp : HWP 5.0 바이너리(OLE). BodyText/SectionN 의 문단 글자(PARA_TEXT)를 순서대로 읽는다. 표 칸은 한 줄씩 흩어져 나온다.
-         olefile 이 필요하다 (pip install olefile).
-- 자동 번호: 한글은 "(1)", "1." 같은 번호를 글자로 저장하지 않고 문단의 번호 서식으로만 저장한다. 서식 정의를 읽어
-  번호를 세어 글자로 되살린다 (워드 docx_text 와 같은 방식). 글머리표는 "-". 새 번호로 시작하는 설정은 읽지 않고 문서 끝까지 이어 센다.
-- 그림은 [이미지], 수식은 수식 스크립트("{a} over {b}")로 남긴다. 줄 앞 NBSP 는 보통 공백으로 바꾼다.
-"""
+"""한글 문서(.hwp / .hwpx)를 본문 순서대로 텍스트로 만든다. (pdf_intake.read_text 가 부른다)"""
 import re
 import struct
 import zipfile
@@ -54,8 +46,7 @@ def _fmt_num(n, kind):
 
 
 class _AutoNumber:
-    """번호 서식 id → {수준(1부터): (형식, 문구, 시작값)}. 문단마다 label() 을 부르면 번호를 세어 글자로 돌려준다.
-    문구의 ^1~^7 은 해당 수준의 번호 자리다. 번호 자리가 없는 문구(글리프)는 글머리표로 보고 "-" 를 돌려준다."""
+    """번호 서식 id → {수준(1부터): (형식, 문구, 시작값)}. 문단마다 label() 을 부르면 번호를 세어 글자로 돌려준다."""
 
     def __init__(self, formats):
         self.formats, self.count = formats, {}

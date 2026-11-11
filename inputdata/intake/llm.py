@@ -1,11 +1,4 @@
-"""AI 호출 공통 모듈 (Anthropic / Google Gemini) 과 .env 읽기.
-
-- 키는 환경변수 또는 .env 파일에서 읽는다. (키 값은 화면에 출력하지 않는다)
-    Google :  GEMINI_API_KEY  (또는 GOOGLE_API_KEY)
-    Anthropic: ANTHROPIC_API_KEY
-    기타    :  LLM_PROVIDER=google|anthropic , LLM_MODEL=모델이름 , NOTI_TOKEN=서버 로그인 토큰
-- .env 는 현재 폴더, 이 파일이 있는 폴더, 그 상위 폴더 2단계까지 순서대로 찾는다. 이미 설정된 환경변수는 덮어쓰지 않는다.
-"""
+"""AI 호출 공통 모듈 (Anthropic / Google Gemini) 과 .env 읽기."""
 from functools import lru_cache
 import http.client, json, os, re, time, urllib.error, urllib.request
 
@@ -103,8 +96,7 @@ class FatalLLMError(RuntimeError):
 
 
 def thinking_config(v):
-    """'low' → {"thinkingLevel": "low"} (Gemini 3 계열), '0' / '1024' / '-1' → {"thinkingBudget": 숫자} (Gemini 2.5 계열).
-    두 가지를 같은 요청에 함께 보내면 400 오류이므로 하나만 만든다."""
+    """'low' → {"thinkingLevel": "low"} (Gemini 3 계열), '0' / '1024' / '-1' → {"thinkingBudget": 숫자} (Gemini 2.5 계열)."""
     v = str(v).strip().lower()
     if v in ("minimal", "low", "medium", "high"): return {"thinkingLevel": v}
     if re.fullmatch(r"-?\d+", v): return {"thinkingBudget": int(v)}
@@ -265,6 +257,8 @@ def _call_one(provider, model, key, system, user, max_tokens, url, timeout, wait
         body = {"model": model, "messages": [{"role": "system", "content": sysmsg}, {"role": "user", "content": content}]}
         body[os.environ.get("LLM_MAX_TOKENS_PARAM") or "max_tokens"] = max_tokens          # 새 OpenAI 모델은 max_completion_tokens 를 요구한다
         if os.environ.get("LLM_TEMPERATURE"): body["temperature"] = float(os.environ["LLM_TEMPERATURE"])      # 일부 모델은 temperature 를 받지 않으므로 지정했을 때만 보낸다
+        elif not os.environ.get("LLM_BASE_URL") and not str(model).startswith(("gpt-5", "o1", "o3", "o4")):
+            body["temperature"] = 0                                    # OpenAI 의 일반 채팅 모델은 기본 온도가 1 이라 같은 입력도 답이 매번 달라진다. 0 으로 두어 결과를 안정시킨다 (생각 모델은 값을 받지 않으므로 제외)
         if thinking: body["reasoning_effort"] = str(thinking)
         if os.environ.get("LLM_EXTRA_BODY"):                    # 서비스마다 다른 추가 요청 값(생각 줄이기 등)을 코드 수정 없이 .env 로 넣는다. 예: LLM_EXTRA_BODY={"reasoning_effort":"low"}
             try: body.update(json.loads(os.environ["LLM_EXTRA_BODY"]))
@@ -287,14 +281,7 @@ def _call_one(provider, model, key, system, user, max_tokens, url, timeout, wait
 
 
 def call_llm(provider, model, key, system, user, max_tokens=12000, url=None, timeout=300, retries=None, waits=None, on_retry=None, fallbacks=None, on_fallback=None, info=None, thinking=None, images=None):
-    """system 지시와 user 입력을 보내고 응답 텍스트를 돌려준다. (모델은 하나만 쓴다. 모델 대체는 하지 않는다)
-
-    waits: 혼잡·한도 오류 때 기다릴 시간 목록(초). 기본 RETRY_WAITS. retries=0 이면 재시도하지 않는다.
-    on_retry(회차, 전체, 대기초, 이유): 재시도 전에 호출된다. (진행 상황 표시용)
-    url: 문자열 또는 함수(model -> url). 테스트용.
-    info: dict 를 주면 응답한 모델(model), 걸린 시간(elapsed, 초), 재시도 대기(waited, 초), 사용량(usage), 생각 설정(thinking)을 넣어 준다.
-    thinking: Google 모델의 생각 정도. "minimal"/"low"/"medium"/"high" 또는 숫자(thinkingBudget). 기본은 .env 의 LLM_THINKING, 없으면 지정 안 함.
-    images: [{"mime": "image/png", "b64": base64 글자}, …] 를 주면 글 뒤에 그림으로 함께 보낸다 (코드·실행 화면 스크린샷 등)."""
+    """system 지시와 user 입력을 보내고 응답 텍스트를 돌려준다. (모델은 하나만 쓴다. 모델 대체는 하지 않는다)"""
     if waits is None: waits = [] if retries == 0 else (RETRY_WAITS[:retries] if retries else RETRY_WAITS)
     th = thinking if thinking is not None else os.environ.get("LLM_THINKING") or None      # 생각 정도: 인자 > .env(LLM_THINKING) > 모델 기본값
     t0, waited = time.time(), [0.0]
@@ -405,8 +392,7 @@ def _clean_row(d):
 
 
 def _load(ln):
-    """JSON 한 줄을 읽는다. 모델이 마지막 닫는 괄호 }를 한두 개 빠뜨린 경우(긴 출력에서 가끔 생김)만 보태서 다시 읽는다.
-    복구한 결과도 스키마·검사를 그대로 거치므로, 내용이 모자라면 그 단계에서 막힌다."""
+    """JSON 한 줄을 읽는다. 모델이 마지막 닫는 괄호 }를 한두 개 빠뜨린 경우(긴 출력에서 가끔 생김)만 보태서 다시 읽는다."""
     for extra in ("", "}", "}}"):
         try: return json.loads(ln + extra)
         except ValueError: continue
@@ -448,6 +434,16 @@ def _drop_blocks(text, tag, heads):
     return text[:m.start(1)] + "\n".join(out) + text[m.end(1):]
 
 
+_CODING_ONLY = ("- 조건제안(", "- 추가케이스(")                         # 코딩·디버깅에만 쓰는 prompt.md 항목의 첫머리
+_TYPE_RE = re.compile(r'"(?:유형힌트|유형)":\s*"([^"]*)"')
+
+
+def noncoding_only(user):
+    """입력의 유형 힌트가 모두 객관식·단답형·주관식이면 True (힌트가 없거나 코딩·디버깅이 하나라도 있으면 False)."""
+    types = _TYPE_RE.findall(user or "")
+    return bool(types) and all(t in ("객관식", "단답형", "주관식") for t in types)
+
+
 def kind_of_input(user):
     """user 글에 든 입력 JSON 에서 (입력종류, 원본형식, 표형식). 찾지 못하면 None."""
     k = _KIND_RE.search(user or "")
@@ -457,7 +453,7 @@ def kind_of_input(user):
 
 
 @lru_cache(maxsize=64)
-def _trim(prompt, kind, doc_fmt, table_fmt, has_images):
+def _trim(prompt, kind, doc_fmt, table_fmt, has_images, noncoding=False):
     if kind not in ("엑셀", "원본", "둘 다"): return prompt          # 알 수 없는 입력은 줄이지 않는다
     text = prompt
     if kind in ("원본", "둘 다"):                                    # 쓰는 문서 형식만 남긴다 (형식을 모르면 문서 형식은 모두 남김)
@@ -471,6 +467,7 @@ def _trim(prompt, kind, doc_fmt, table_fmt, has_images):
     else:
         text = _drop_blocks(text, "형식별 필터링", _ALL_TABLE_HEADS)
     if not has_images: text = _drop_blocks(text, "형식별 필터링", (_IMAGE_HEAD,))
+    if noncoding: text = chr(10).join(l for l in text.split(chr(10)) if not l.startswith(_CODING_ONLY))      # 객관식·단답형·주관식만 있으면 코딩 전용 제안 항목은 보내지 않는다
     if kind == "엑셀":
         text = _drop_blocks(text, "입력 종류별 처리", ("[원본]", "[둘 다]"))
     elif kind == "원본":
@@ -482,7 +479,7 @@ def trim_prompt(prompt, user, has_images=None):
     """user 글(채점 모드 + 입력 JSON)에 맞게 줄인 프롬프트. has_images: 그림을 실제로 보내는지(서버가 알고 있으면 넘긴다). 모르면 입력 글의 그림 안내로 판단한다."""
     kind, doc_fmt, table_fmt = kind_of_input(user)
     if has_images is None: has_images = bool(_IMG_RE.search(user or ""))
-    return _trim(prompt, kind, doc_fmt, table_fmt, bool(has_images))
+    return _trim(prompt, kind, doc_fmt, table_fmt, bool(has_images), noncoding_only(user))
 
 
 # ====================================================================================================

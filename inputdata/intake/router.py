@@ -1,19 +1,5 @@
 # app/inputdata/intake/router.py
-"""문제지 업로드 → AI 정리 → 승인 후 등록 API.
-
-  POST   /intake/preview                 AI 를 부르지 않고 파일을 문제로 나눈 결과만 확인 (문제 수·경계·그림·경고)
-  POST   /intake/jobs                    파일 업로드(엑셀·워드·PDF…) → 작업 생성, 백그라운드 처리 시작 (202)
-  GET    /intake/jobs                    내 작업 목록
-  GET    /intake/jobs/{job_id}           진행 상황과 상태별 개수
-  GET    /intake/jobs/{job_id}/items     결과 항목 (status 로 거르기)
-  POST   /intake/jobs/{job_id}/approve   한꺼번에 등록 (item_ids / all / edits: 수정+재검사+등록을 한 번의 호출로)
-  DELETE /intake/jobs/{job_id}           작업 데이터 지우기 (등록된 문제는 그대로)
-  POST   /intake/jobs/{job_id}/resume    AI 처리에 실패했거나 중단된 문제를 이어서 처리
-  PATCH  /intake/items/{item_id}         항목 내용(payload)·부제목·문제의도 수정 → 서버가 다시 검사해 상태를 정함
-  GET    /intake/items/{item_id}/original  이 문제의 원본(글·엑셀 열·그림)만
-  POST   /intake/items/{item_id}/suggest-conditions  조건 예시 하나 (정답 코드가 쓰는 것 기준, AI 없음)
-  POST   /intake/items/{item_id}/reject  항목 제외
-"""
+"""문제지 업로드 → AI 정리 → 승인 후 등록 API."""
 import os
 import tempfile
 from typing import Annotated, List, Optional

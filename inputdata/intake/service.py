@@ -37,17 +37,6 @@ from . import parsing
 from .parsing import attached_images, batch_user_text, user_text
 # ====================================================================================================
 # 목차 — 문제지 업로드 처리·승인·등록의 중심 파일입니다. 함수가 구역 순서로 모여 있습니다.
-#
-#   1. 작업 만들기 · 진행 관리
-#       set_session_factory, session_scope, _now, is_running, _alive, create_job, delete_jobs, purge_old_jobs, daily_usage, active_job, job_summary, reset_failed
-#   2. AI 처리 흐름 (작업 하나를 문제 단위로 처리)
-#       _beat, _keepalive, SlowCall, _timed, _accepts, _tokens, _log_call, _log_summary, _default_ai, _seen_hashes, process_job, _forced_hold, _batchable, _batch_key, _precheck, _split_fail, _hold_fail, _fill_code, _fill_meta, _repair_note, _run_batches, _handle, _process, _stop, _store_rows
-#   3. 상태 결정
-#       _runnable, classify
-#   4. 등록 · 승인 (approve: item_ids / all / edits 로 한꺼번에)
-#       register_payload, _max_existing, allocate_title, _give_code_title, _apply_register, approve
-#   5. 승인 화면에서 쓰는 기능 (수정 후 재검사 · 원본 보기 · 조건 예시 · 원본 캡처)
-#       item_out, suggest_conditions, capture_job, original_of, edit_payload
 # ====================================================================================================
 
 # ----------------------------------------------------------------------------------------------------
@@ -275,8 +264,7 @@ async def process_job(job_id, ai_fn=None):
         _RUNNING.discard(job_id)
 
 def _forced_hold(rec):
-    """엑셀(또는 둘 다) 입력에서 이름이 없거나 같은 이름이 여러 번 나오면 AI 를 부르지 않고 바로 보류한다 (제목을 임의로 바꿔 등록하지 않기 위해).
-    서버가 읽을 때 적어 둔 메모(같은 이름이 여러 번 나옴)를 근거로 하므로 AI 의 판단에 맡기지 않는다. 해당하지 않으면 None."""
+    """엑셀(또는 둘 다) 입력에서 이름이 없거나 같은 이름이 여러 번 나오면 AI 를 부르지 않고 바로 보류한다 (제목을 임의로 바꿔 등록하지 않기 위해)."""
     why = fix.unsolvable_reference(rec)
     if why:                                                                      # 교재 문제 번호만 있고 내용이 없는 문제: AI 를 부르지 않고 보류 (설명을 보고 풀 수 없으면 보류)
         return {"id": str(rec.get("key")), "payload": None, "review": {
@@ -365,14 +353,25 @@ def _hold_fail(row, rec):
     if not _UNSOLVED_HOLD_RE.search(why) or rec.get("이미지") or "서술" in why or "주관식" in why: return []
     return ["hold: 정답이 비어 있다는 이유는 보류 사유가 아닙니다. 객관식(options, correct_answers)과 단답형(answer_text)은 문제를 직접 풀어 채우세요(채움에 근거와 검증을 적음). 서술형 모범 답안만 비워 둡니다."]
 
+def _confirmed_type(rec):
+    """서버가 확정한 유형(코드 작성 소문항으로 나눈 문제: 코딩 또는 디버깅). 확정하지 않았으면 None."""
+    it = (rec or {}).get("intake") or {}
+    return it.get("유형힌트") if it.get("유형확정") else None
+
+def _type_fail(row, rec):
+    """서버가 확정한 유형과 다른 유형으로 낸 결과는 다시 쓰게 할 이유를 돌려준다 (모델마다 같은 문제를 다른 유형으로 정하면 설명·코드 위치·테스트 케이스가 모두 달라지기 때문)."""
+    want = _confirmed_type(rec)
+    p = (row or {}).get("payload")
+    if not want or not isinstance(p, dict) or p.get("problemType") in (None, want): return []
+    need = "base_code(문제에 주어진 코드), reference_codes(주어진 코드를 완성한 전체 실행 가능한 코드), test_cases" if want == "디버깅" else "reference_codes, test_cases"
+    return [f"type: 서버가 이 문제를 코드를 작성하는 소문항으로 보고 유형을 '{want}' 로 확정했습니다. problemType 을 '{want}' 로 쓰고 {need} 를 채워 다시 쓰세요 (설명은 원문 그대로)."]
+
+
 _LANG_OK = {"cpp": "cpp", "c": "c", "python": "python", "java": "java", "javascript": "javascript"}
 
 
 async def _fill_code(rows, rec, ai_fn, wants_info, calls):
-    """코딩·디버깅 결과에 정답 코드(reference_codes)나 제공 코드(base_code, 디버깅)가 끝내 비어 있으면(다시 쓰기로도 안 채워질 때) 서버가 채운다.
-    - 제공 코드: 설명(없으면 원본 글) 속의 코드 블록을 떼어 base_code 로 (코드처럼 보이는 줄이 3줄 이상 이어진 구간)
-    - 정답 코드: 그 코드만 쓰게 하는 짧은 호출 (큰 호출보다 출력이 짧아 잘 채워진다). 채움에 '손 추적' 으로 기록
-    언어를 알 수 없으면 정답 코드 호출은 하지 않는다. 채운 개수."""
+    """코딩·디버깅 결과에 정답 코드(reference_codes)나 제공 코드(base_code, 디버깅)가 끝내 비어 있으면(다시 쓰기로도 안 채워질 때) 서버가 채운다."""
     n = 0
     lang = _LANG_OK.get(str(((rec.get("intake") or {}).get("언어힌트") or "")).lower())
     for r in rows:
@@ -482,6 +481,7 @@ async def _handle(ctx, item_id):
             light = fix.light_payload(rec, mode)
             if light:
                 lp, need = light
+                if not config.fill_cond(): need = [k for k in need if k not in ("conditions", "extra_cases")]
                 meta, ok = {}, True
                 if need:
                     kw = {"system": fix.META_SYSTEM}
@@ -528,7 +528,7 @@ async def _handle(ctx, item_id):
                 except Exception as e3:
                     logger.warning("형식 다시 요청 실패 %s: %s", rec.get("key"), e3)
             for attempt in range(config.repair_rounds() + 1 if len(parsed) == 1 else 0):          # 서버 검사에서 막힐 결과면 이유를 알려 주고 AI 가 한 번 고쳐 쓰게 한다 (모델이 달라도 결과를 맞추는 장치)
-                fails = await _precheck(parsed[0], rec, exec_on) + _split_fail(parsed[0], rec) + _hold_fail(parsed[0], rec)
+                fails = await _precheck(parsed[0], rec, exec_on) + _split_fail(parsed[0], rec) + _hold_fail(parsed[0], rec) + _type_fail(parsed[0], rec)
                 if not fails: break
                 if attempt >= config.repair_rounds() and (config.repair_rounds() == 0 or not any(str(f).startswith(("split:", "schema:")) for f in fails)): break      # 방식 분할이 빠졌거나 필수 항목이 비었을 때만 한 번 더 시도한다
                 try:
@@ -649,46 +649,11 @@ async def _store_rows(db, job_id, first_item_id, seq, rec, rows, seen, exec_on, 
         r["review"] = r.get("review") or {}
         if exec_on and r.get("payload"):                                    # AI 가 손으로 추적한 기대 출력을 정답 코드의 실제 실행 출력으로 채움 (모델에 따라 틀리는 값을 서버가 바로잡는다)
             await asyncio.to_thread(fix.fill, r["payload"], r["review"], checker.run_code, checker.norm_out)
-        r["payload"], _ = fix.normalize(r.get("payload"), r["review"])      # 형식 실수 바로잡기 (내용은 건드리지 않음)
-        fix.restore_choice_answers(rec, r["payload"], r["review"])           # 객관식 정답 번호(1부터)를 인덱스(0부터)로 맞춤
-        fix.restore_short_answers(rec, r["payload"], r["review"])         # 엑셀의 번호별 단답 정답을 AI 가 번호 없는 목록으로 바꿨으면 되돌림
-        fix.restore_named_blocks(rec, r["payload"], r["review"])              # 설명이 이름(np1)으로 가리키는 입력 자료의 값이 빠졌으면 원문에서 되살림
-        fix.fix_screenshot_requests(rec, r["payload"], r["review"])            # 그림(캡처) 제출 요구는 글로 답하게 고침 / 코딩은 제출 안내를 뺌
-        fix.align_description_to_source(rec, r["payload"], r["review"])        # AI 가 글자를 다르게 옮긴 줄을 원문 줄로 되돌림
-        fix.promote_code_block(rec, r["payload"], r["review"])                     # 설명의 긴 코드(4줄 이상)는 제공 코드로
-        fix.move_base_code_out(rec, r["payload"], r["review"])            # 디버깅의 제공 코드를 설명에서 빼고 제공 코드 칸에만 둠
-        fix.extract_inline_answers(rec, r["payload"], r["review"])           # 소문항 밑에 적힌 답을 설명에서 떼어 정답 칸으로
-        fix.drop_other_methods(rec, r["payload"], r["review"])               # 서버가 방식별로 나눈 문제에서 다른 방식 안내를 뺌
-        fix.clean_split_phrases(rec, r["payload"], r["review"])               # 분할한 문제에서 "모두 작성" 같은 안내 문장을 뺌
-        fix.fill_answers_from_source(rec, r["payload"], r["review"])          # 원문에서 소문항 밑의 답을 직접 찾아 정답 칸을 채움 (AI 가 줄을 합쳐도 찾음)
-        fix.subquestions_to_short(rec, r["payload"], r["review"])            # 소문항이 둘 이상인 주관식은 소문항별 정답이 있는 단답형으로
-        fix.strip_answer_lines(r["payload"], r["review"])                        # 정답 칸에 있는 줄과 같은 줄은 설명에서 뺌
-        fix.number_short_answers(r["payload"], r["review"])
-        fix.check_missing_subanswers(r["payload"], r["review"])                  # 정답이 없는 소문항은 확인필요에 적음                  # 단답형 정답을 설명의 번호 소문항대로 번호별로 나눔
-        fix.drop_noncode_conditions(r["payload"], r["review"])               # 객관식·단답형·주관식에는 조건 목록을 쓰지 않는다
-        fix.strip_row_number(rec, r["payload"], r["review"])
-        fix.trim_description(rec, r["payload"], r["review"])                 # 설명에 같이 복사된 조건·입출력 예 구역을 뺌 (조건·테스트 케이스에 옮겨진 것만)
-        fix.strip_description_images(rec, r["payload"], r["review"])        # 원본 설명의 마크다운 그림 링크 줄을 지움
-        fix.strip_description_markdown(r["payload"], r["review"])           # 설명에 남은 마크다운 굵게 기호(**)를 서버가 지움
-        fix.restore_excel_description(rec, r["payload"], r["review"])        # 엑셀 단독 입력의 설명을 AI 가 바꿨으면 엑셀 값으로 되돌림
-        fix.restore_excel_codes(rec, r["payload"], r["review"])             # 엑셀·DB 의 코드를 AI 가 고쳤으면 원래 값으로 되돌리고 조언에 제안으로 남김
-        fix.restore_excel_outputs(rec, r["payload"], r["review"])           # 엑셀의 출력 열을 AI 가 바꿨으면 엑셀 값으로 되돌림
-        fix.image_plan(rec, r["review"])                                    # 올릴 수 있는 그림(출력 예시·개념)만 올림 표시, 정답이 보이는 그림은 막음
-        fix.drop_env_link_flags(r["review"])                              # 실행환경 링크(Trinket 등)로 단 확인필요는 지움
-        fix.drop_false_injection(rec, r["review"])                          # 모델이 안내문을 입력으로 오해해 단 거짓 경고 지우기
-        if r["payload"] is None and (r["review"].get("상태") != "보류"): r["review"]["상태"] = "보류"; r["review"]["보류사유"] = r["review"].get("보류사유") or "AI 출력에 payload 가 없음"
-        orig_title = fix_title(rec, r.get("payload"))            # AI 가 줄인 제목을 입력의 이름으로 되돌림
-        if orig_title is not None:
-            r["id"] = r["payload"]["title"]
-            rv = r["review"] = r.get("review") or {}
-            rv["참고"] = list(rv.get("참고") or []) + [f"제목을 입력의 이름으로 되돌렸습니다 (AI: {orig_title})"]
+        fix.correct(rec, r)                                                    # 형식 바로잡기·원문 복원·설명 정리 등 서버 보정 전부 (AI·DB 호출 없음. 시험 도구도 같은 함수를 씀)
         if r.get("payload"):
-            rv = r["review"] = r.get("review") or {}
-            rv["제목정보"] = fix.title_info(rec, r["payload"])                    # 등록될 제목(접두+순번)과 부제목이 될 원래 이름을 검토 화면에 보여 줌
-        dropped = fix.strip_ai_answer(rec, r.get("payload"), r.get("review"))     # 서술형 답은 AI 가 쓰지 않는다
-        if dropped:
-            rv = r["review"] = r.get("review") or {}
-            rv["참고"] = list(rv.get("참고") or []) + ["서술형 모범 답안은 AI 가 작성하지 않으므로 직접 입력해야 합니다."]
+            await asyncio.to_thread(fix.extend_cases, r["payload"], r["review"], checker.run_code, checker.norm_out, exec_on)      # 입력을 받는 코드인데 테스트 케이스가 1개뿐이면 입력만 다른 케이스를 2개까지 더함
+            suggest.apply_conditions(r["payload"], r["review"])               # AI 가 제안한 조건(사용 기능·출력형식)을 정답 코드·기대 출력과 맞는지 확인하고 자동으로 더함
+        fix.finish(rec, r)                                                     # 그림 올림 표시·거짓 경고 지우기·제목 되돌리기·서술형 답 비우기
         case = {"id": r["id"], "payload": r.get("payload"), "review": r.get("review") or {}, "record": rec}
         if rec.get("원본조각"): case["원본조각"] = rec["원본조각"]
         if rec.get("이미지"): case["그림있음"] = True          # 그림에서 옮긴 설명 글은 원본 글에 없으므로 설명 대조를 완화한다
@@ -797,8 +762,7 @@ async def _max_existing(db, prefix):
 
 
 async def allocate_title(db, prefix):
-    """등록 제목 'PY41_0007' 을 하나 예약한다: 접두별 카운터 표의 한 줄을 원자적으로 +1 (서버가 여러 개여도 같은 번호가 나가지 않는다).
-    쓰지 않고 버린 번호는 빈 번호로 남고 다시 쓰지 않는다. 카운터 표가 아직 없는 DB(마이그레이션 전)에서는 기존 방식(가장 큰 번호 + 1)으로 대신한다."""
+    """등록 제목 'PY41_0007' 을 하나 예약한다: 접두별 카운터 표의 한 줄을 원자적으로 +1 (서버가 여러 개여도 같은 번호가 나가지 않는다)."""
     try:
         async with db.begin_nested():
             exists = (await db.execute(select(ProblemTitleSeq.last_no).where(ProblemTitleSeq.prefix == prefix))).scalar()
@@ -813,8 +777,7 @@ async def allocate_title(db, prefix):
     return f"{prefix}_{n:04d}"
 
 async def _give_code_title(db, payload, review):
-    """처리 결과의 제목을 영문·숫자 코드로 바꾼다 (승인 화면에서도 코드로 보이게). 번호는 이때 예약해 등록할 때 그대로 쓰고,
-    원래 이름은 review.제목정보.원래이름 에 두고 부제목·중복 검사에 쓴다."""
+    """처리 결과의 제목을 영문·숫자 코드로 바꾼다 (승인 화면에서도 코드로 보이게). 번호는 이때 예약해 등록할 때 그대로 쓰고,"""
     ti = (review or {}).get("제목정보")
     if not isinstance(ti, dict) or not isinstance(payload, dict): return
     t = await allocate_title(db, ti["코드접두"])
@@ -843,9 +806,7 @@ async def _apply_register(db, item_id, payload, maker_id):
     return status, info
 
 async def approve(db, job_id, maker_id, item_ids=None, edits=None):
-    """승인(등록). item_ids 가 None 이면 승인할 수 있는 모든 항목.
-    edits: [{item_id, payload?, subtitle?, intent?}] — 고친 내용을 먼저 저장·재검사한 뒤 승인한다 (한 번의 호출로 수정+등록). 고친 항목은 승인 대상에 자동으로 들어간다.
-    일부가 막혀도 나머지는 등록하고, 막힌 것은 이유(edit_failed / skipped + 검사 결과)와 함께 돌려준다."""
+    """승인(등록). item_ids 가 None 이면 승인할 수 있는 모든 항목."""
     results, edited = [], []
     for e in edits or []:
         iid = e["item_id"]
@@ -896,8 +857,7 @@ def item_out(it, with_record=False):
     return d
 
 def suggest_conditions(it, form=None, current=None):
-    """조건 예시 하나: 정답 코드가 쓰는 것을 읽어 '무엇을 사용해서 작성해야 하는지'를 조건으로 돌려준다 (AI 호출 없음, 즉시, 저장 안 함).
-    form: 화면의 지금 내용(저장 전 수정 포함), 없으면 저장된 payload. current: 화면의 지금 조건 목록."""
+    """조건 예시 하나: 정답 코드가 쓰는 것을 읽어 '무엇을 사용해서 작성해야 하는지'를 조건으로 돌려준다 (AI 호출 없음, 즉시, 저장 안 함)."""
     p = form if isinstance(form, dict) else (it.payload or {})
     if p.get("problemType") not in ("코딩", "디버깅"):
         raise HTTPException(status_code=400, detail="조건은 코딩·디버깅 문제에만 있습니다.")
@@ -910,8 +870,7 @@ _CAPTURE_LOCK = asyncio.Lock()                                  # 문서 변환(
 
 
 async def capture_job(job_id, files, records):
-    """올린 문서를 쪽 이미지로 만들어 저장하고, 문제마다 어느 쪽인지 기록한다 (AI 처리와 따로 백그라운드로). 실패해도 처리에는 영향 없다.
-    files: [(표시 이름, 확장자, 바이트)] — 읽은 뒤 지우는 원본의 사본이며, 이 함수가 끝나면 메모리에서 사라진다."""
+    """올린 문서를 쪽 이미지로 만들어 저장하고, 문제마다 어느 쪽인지 기록한다 (AI 처리와 따로 백그라운드로). 실패해도 처리에는 영향 없다."""
     if not config.capture() or not files: return
     res = None
     try:
@@ -962,9 +921,7 @@ async def original_of(db, it):
             "split": rec.get("방식분할"), "whole_doc": bool(rec.get("문서전체")), "memo": (rec.get("intake") or {}).get("메모") or []}
 
 async def edit_payload(db, item, payload, subtitle=None, intent=None):
-    """사람이 payload(와 부제목·문제의도)를 고친다. 스키마 검사를 통과해야 저장되고, 서버 검사를 다시 돌려 상태를 정한다:
-    검사 실패 → blocked, 비어 있는 입력(테스트 케이스 출력·서술형 답 등) → needs_input, 그 밖 → needs_review. 등록은 승인 때 한다.
-    (화면에서만 막으면 우회되므로 서버가 마지막 판단을 한다. 사람이 고친 설명은 원문 대조를 하지 않는다.)"""
+    """사람이 payload(와 부제목·문제의도)를 고친다. 스키마 검사를 통과해야 저장되고, 서버 검사를 다시 돌려 상태를 정한다:"""
     payload = dict(payload)
     wrapped = unwrap_description(payload.get("description"))              # 프론트가 설명을 {"intent","subtitle","content"} 로 이미 묶어 보냈으면 풀어서 본문만 검사하고,
     if wrapped is not None:                                              # 부제목·문제의도는 따로 보관했다가 등록할 때 같은 모양으로 다시 묶는다

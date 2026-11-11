@@ -1,11 +1,4 @@
-"""원본 문제지(PDF)를 문제 단위로 나누고 사전 점검한다. (원본만 받는 경로의 입력 준비)
-
-출력(JSONL, 한 줄에 문제 하나):
-  {"입력종류": "원본", "source": "파일", "id": "PY41-0001", "page": 2, "원본조각": "...",
-   "intake": {"이미지의심": false, "방식표기": ["방법1","방법2"], "입출력예수": 1, "빈칸표기": false, "링크": false, "유형힌트": "코딩", "메모": [...]}}
-- 문제 제목("문제 XX00-0000")을 기준으로 나누고, 목차·표지·페이지 바닥글은 제외한다.
-- intake 는 규칙 기반 추정이다. 구조 추출(조건, 입출력 예, 제공코드)과 의미 판단은 AI 가 한다.
-"""
+"""원본 문제지(PDF)를 문제 단위로 나누고 사전 점검한다. (원본만 받는 경로의 입력 준비)"""
 import re, subprocess, unicodedata
 
 from . import images as safety      # 업로드 파일 안전 점검(images.py 안)
@@ -47,16 +40,29 @@ _ANS_VALUE_RE = re.compile(r"(?:이름|명령어|명령|용어|값|키워드|표
 _MAKE_RE = re.compile(r"작성하(?:시오|세요|여|고)|구현하(?:시오|세요|여|고)|만드시오|만들어|프로그램을\s*만|코드를\s*(?:작성|짜)")
 
 
+_IMPERATIVE_RE = re.compile(r"(?:쓰|나열하|생성하|작성하|구현하|설명하|서술하|답하|구하|적|고치|수정하|완성하)(?:시오|세요|십시오)|(?:쓰|적)시오")
+
+
 def _n_opts(text):
-    """보기 줄 수: ①… / 1) … / A. … 로 시작하고, 짧고(80자 이하), 줄 안에 물음표가 없는 줄 (a) …는? 같은 소문항 질문은 보기가 아니다)."""
-    return sum(1 for l in text.split(chr(10)) if _OPT_LINE.match(l) and "?" not in l and len(l.strip()) <= 80)
+    """보기 줄 수: ①… / 1) … / A. … 로 시작하고, 짧고(80자 이하), 줄 안에 물음표가 없고, 명령문('~쓰시오', '~나열하시오')이 아닌 줄."""
+    return sum(1 for l in text.split(chr(10)) if _OPT_LINE.match(l) and "?" not in l and len(l.strip()) <= 80 and not _IMPERATIVE_RE.search(l))
+
+
+_CODE_RE = re.compile(r"#include|def |print\(|printf|int main|for\s*\w+\s+in\s|for\s*\(|\bclass\s+\w+\s*[:{(]|\b(public|private|protected)\s*:")
+
+
+def has_code(text):
+    """글 안에 코드(주어진 코드·클래스 선언 등)가 들어 있는가."""
+    return bool(_CODE_RE.search(text or ""))
 
 
 def hint(text, blank, code):
     if len(_CIRCLED.findall(text)) >= 3 or (_n_opts(text) >= 3 and (_PICK_RE.search(text) or ("?" in text and not _MAKE_RE.search(text)))):      # 보기가 줄지어 있고 고르라는 말이 있으면 객관식
         return "객관식"
-    if _CONCEPT_RE.search(text) and not _WRITE_CODE_RE.search(text):                  # "다음 물음에 답하시오. a) …는? b) …인가?" 처럼 코드를 쓰는 것이 아니라 묻는 문제
-        if len(re.findall(r"(?m)^[ \t]*\(?(?:[a-zA-Z가-하]|\d{1,2})[).]+[ \t]+\S", text)) >= 2: return "단답형"      # 소문항이 둘 이상이면 소문항별 정답(단답형)
+    n_sub = len(re.findall(r"(?m)^[ \t]*\(?(?:[a-zA-Z가-하]|\d{1,2})[).]+[ \t]+\S", text))
+    n_write = len(_WRITE_CODE_RE.findall(text))
+    if _CONCEPT_RE.search(text) and (n_write == 0 or (n_sub >= 3 and n_write == 1)):       # "다음 물음에 답하시오. a) …는? b) …인가?" 처럼 코드를 쓰는 것이 아니라 묻는 문제 (소문항이 셋 이상이고 코드를 쓰라는 소문항이 하나뿐이면 그것도 물음 중 하나)
+        if n_sub >= 2: return "단답형"      # 소문항이 둘 이상이면 소문항별 정답(단답형)
         return "주관식" if _EXPLAIN_RE.search(text) and len(_EXPLAIN_RE.findall(text)) >= 3 else "단답형"
     if re.search(r"(출력\s*)?결과를?\s*(?:작성|쓰시오|쓰세요|적으시오|적으세요|구하시오|구하세요)|출력되는\s*(?:값|내용)[을를]?\s*(?:쓰시오|쓰세요|적으시오)", text): return "단답형"
     if _ANS_VALUE_RE.search(text) and not _MAKE_RE.search(text): return "단답형"                          # "~ 이름을 쓰시오" 처럼 값 하나를 쓰는 문제 (프로그램·함수 낱말이 있어도)
@@ -142,10 +148,7 @@ def _fmt_num(n, fmt):
 
 
 def docx_text(path, images=None):
-    """워드 문서를 본문 순서대로 텍스트로 만든다.
-    - 자동 번호("(1)", "1)", 글머리표)는 글자로 되살린다.  - 표는 칸마다 줄 단위로 풀어 코드 칸이 한 줄씩 유지된다.
-    - 그림은 그림마다 [이미지] 로 표시한다.  - 줄 앞 공백 문자(NBSP)는 보통 공백으로 바꾼다.
-    images: 리스트를 주면 [이미지] 와 같은 순서로 그림 파일(바이트, 읽을 수 없으면 None)을 채운다."""
+    """워드 문서를 본문 순서대로 텍스트로 만든다."""
     import docx                                               # ImportError 는 호출한 쪽에서 처리
     safety.check_zip(path)
     from docx.table import Table
@@ -206,8 +209,7 @@ def docx_text(path, images=None):
 
 
 def pptx_text(path, images=None):
-    """파워포인트(.pptx)를 슬라이드 순서대로 읽는다. 글상자·표·그림·발표자 노트를 만든 순서(위에서 아래가 아닐 수 있음)대로 풀어 쓰고,
-    슬라이드마다 쪽 구분(\\f)을 넣는다. 그림은 [이미지] 로 표시하고 images 리스트를 주면 같은 순서로 그림 파일을 채운다."""
+    """파워포인트(.pptx)를 슬라이드 순서대로 읽는다. 글상자·표·그림·발표자 노트를 만든 순서(위에서 아래가 아닐 수 있음)대로 풀어 쓰고,"""
     import zipfile, posixpath
     from xml.etree import ElementTree as ET
     safety.check_zip(path)
@@ -274,8 +276,7 @@ def pptx_text(path, images=None):
 
 
 def slide_marks(txt, stem):
-    """번호 제목이 없는 슬라이드 묶음의 마지막 방법: 글이 어느 정도 있는 슬라이드 하나를 문제 하나로 본다 [(문제ID, 시작, 본문시작)].
-    문제가 아닌 슬라이드(표지·목차·설명)는 AI 가 보류한다."""
+    """번호 제목이 없는 슬라이드 묶음의 마지막 방법: 글이 어느 정도 있는 슬라이드 하나를 문제 하나로 본다 [(문제ID, 시작, 본문시작)]."""
     out, pos = [], 0
     for i, s in enumerate(txt.split("\f"), 1):
         if len(norm(s)) >= 10: out.append((f"{stem}_{i:02d}", pos, pos))
@@ -309,8 +310,7 @@ POPPLER_HELP = ("PDF 를 읽으려면 poppler 의 pdftotext 가 필요합니다.
 
 
 def read_text(path, images=None):
-    """PDF / DOCX / HWP / HWPX / TXT / MD 에서 텍스트를 읽는다.
-    images: 리스트를 주면 워드·한글의 그림 파일을 본문의 [이미지] 와 같은 순서로 채운다 (PDF·텍스트는 해당 없음)."""
+    """PDF / DOCX / HWP / HWPX / TXT / MD 에서 텍스트를 읽는다."""
     low = path.lower()
     if low.endswith((".hwp", ".hwpx")):
         try:
@@ -346,8 +346,7 @@ def read_text(path, images=None):
 
 
 def numbered_marks(txt):
-    """문서 제목(첫 줄 근처)의 접두와 "(n)" 항목으로 [(문제ID, 시작, 본문시작)] 을 만든다. 예: C++_06 + (3) → C++_06_03
-    제목 형식이 없거나 번호 항목이 없으면 빈 목록."""
+    """문서 제목(첫 줄 근처)의 접두와 "(n)" 항목으로 [(문제ID, 시작, 본문시작)] 을 만든다. 예: C++_06 + (3) → C++_06_03"""
     head = "\n".join(txt.splitlines()[:25])
     t = TITLE_RE.search(head)
     if t: prefix = t.group(1)
@@ -365,8 +364,7 @@ def marks_of(txt, id_re=None):
 
 
 def file_stem(path):
-    """파일 이름에서 문제 묶음 이름을 만든다. 문제 파일과 풀이 파일이 같은 이름이 되도록 '풀이·문제·정답' 꼬리와 앞의 연도를 뗀다.
-    예: 2025_자바프로그래밍1_실습_5주차_조건문_풀이.pdf → 자바프로그래밍1_실습_5주차_조건문"""
+    """파일 이름에서 문제 묶음 이름을 만든다. 문제 파일과 풀이 파일이 같은 이름이 되도록 '풀이·문제·정답' 꼬리와 앞의 연도를 뗀다."""
     s = re.sub(r"\.[A-Za-z0-9]+$", "", path.replace(chr(92), "/").split("/")[-1])
     s = re.sub(r"[_\s-]*(풀이|정답|해설|문제)\s*$", "", s)
     s = re.sub(r"^\d{4}[_\s-]+", "", s)
@@ -374,8 +372,7 @@ def file_stem(path):
 
 
 def heading_marks(txt, stem):
-    """ID 정규식도 '(n) 항목'도 없을 때의 마지막 방법: '실습 1.' 같은 번호 제목으로 [(문제ID, 시작, 본문시작)] 을 만든다.
-    ID 는 파일 이름 + 번호이다. 번호가 앞으로 되돌아가면(1, 2, 1, 2) 새 묶음이므로 b, c … 를 붙여 서로 덮어쓰지 않게 한다."""
+    """ID 정규식도 '(n) 항목'도 없을 때의 마지막 방법: '실습 1.' 같은 번호 제목으로 [(문제ID, 시작, 본문시작)] 을 만든다."""
     out, last, group = [], 0, 0
     if len(HEADING_RE.findall(txt)) < 2:                   # 낱말 제목이 없으면 번호만 있는 제목: 1, 2, 3 … 순서로 이어지는 번호만 인정한다 (코드·목록 속 숫자 제외)
         for m in NUMBER_RE.finditer(txt):
@@ -430,8 +427,7 @@ def _render_pdfium(path, page, dpi):
 
 
 def embedded_jpegs(path, min_side=300, limit=200 * 1024 * 1024):
-    """PDF 안에 들어 있는 JPEG(DCTDecode) 그림을 파일에 나온 순서대로 돌려준다. 스캔 PDF 는 쪽마다 쪽 크기의 JPEG 하나가 들어 있는 경우가 많아,
-    그림 변환 도구(pdftoppm, pypdfium2)가 없는 환경의 마지막 대체 경로로 쓴다. 작은 그림(로고·아이콘)은 뺀다."""
+    """PDF 안에 들어 있는 JPEG(DCTDecode) 그림을 파일에 나온 순서대로 돌려준다. 스캔 PDF 는 쪽마다 쪽 크기의 JPEG 하나가 들어 있는 경우가 많아,"""
     import os
     if os.path.getsize(path) > limit: return []
     data = open(path, "rb").read()
@@ -449,8 +445,7 @@ def embedded_jpegs(path, min_side=300, limit=200 * 1024 * 1024):
 
 
 def render_pdf_page(path, page, dpi=110, n_pages=None):
-    """PDF 한 쪽을 PNG 바이트로 그린다 (그림 속 코드·실행 화면, 글에서 빠진 수식은 쪽 전체를 보내 AI 가 읽게 한다). poppler 의 pdftoppm 을 먼저 쓰고,
-    없거나 실패하면 pypdfium2 를 쓴다. 둘 다 안 되면 None."""
+    """PDF 한 쪽을 PNG 바이트로 그린다 (그림 속 코드·실행 화면, 글에서 빠진 수식은 쪽 전체를 보내 AI 가 읽게 한다). poppler 의 pdftoppm 을 먼저 쓰고,"""
     import tempfile, os
     with tempfile.TemporaryDirectory() as d:
         try:
@@ -471,8 +466,7 @@ _TASK_CUE = re.compile(r"(?:작성|구현|추가|수정|완성|고치|변경|바
 
 
 def split_subtasks(body):
-    """한 문제 안에 '1) … 구현하세요 2) … 작성하세요 3) … 수정하세요' 처럼 코드를 작성·수정하는 소문항이 둘 이상이면 소문항마다 문제 하나로 나눈다.
-    [(접미사, 글)] 을 돌려준다. 나누지 않으면 [("", body)]. 소문항 앞의 머리말(공통 설명·제공 코드)은 모든 조각에 붙인다. 소문항 번호가 1,2,3(또는 a,b,c)로 차례로 이어질 때만 소문항으로 본다."""
+    """한 문제 안에 '1) … 구현하세요 2) … 작성하세요 3) … 수정하세요' 처럼 코드를 작성·수정하는 소문항이 둘 이상이면 소문항마다 문제 하나로 나눈다."""
     seq = []
     for m in _SUB_MARK.finditer(body):
         lab = m.group(1)
@@ -508,10 +502,7 @@ _TAG_LINE_RE = re.compile(r"^[ \t]*<[^<>\n]{1,15}>[ \t]*$")                     
 
 
 def clean_section(body):
-    """원본에서 나눈 문제 조각의 잡음을 걷어낸다. (본문, 문서 안의 정답 구역 또는 None)
-    - 앞뒤의 번호 잔재("-4")·구역 표시("<추가문제>") 줄을 지운다
-    - "- 정답" 같은 정답 구역 머리 줄부터 끝까지는 설명이 아니라 정답 자료이므로 따로 돌려준다 (설명에 정답 코드가 섞여 학생에게 보이지 않게)
-    본문이 거의 남지 않으면 원래 그대로 돌려준다."""
+    """원본에서 나눈 문제 조각의 잡음을 걷어낸다. (본문, 문서 안의 정답 구역 또는 None)"""
     lines = str(body or "").split("\n")
     while lines and (not lines[0].strip() or _LONE_NUM_RE.match(lines[0]) or _TAG_LINE_RE.match(lines[0]) or _HEADING_LINE_RE.match(lines[0])): lines.pop(0)
     while lines and (not lines[-1].strip() or _TAG_LINE_RE.match(lines[-1])): lines.pop()
@@ -528,9 +519,7 @@ def clean_section(body):
 
 
 def sections(path, id_re=None, label=None):
-    """문제 제목 기준으로 나눈다. 목차에도 같은 제목이 있으므로, 같은 ID가 여러 번 나오면 본문이 가장 긴 것을 쓴다.
-    제목이 'ID 정규식'(기본: 문제 PY11-0001)에 맞지 않으면 '문서 제목 + (n) 항목' 형식(C++_06 문서의 (3)번 → C++_06_03)으로 나누고, 그것도 없으면 '실습 1.' 같은 번호 제목으로 나눈다.
-    label: 업로드된 파일의 원래 이름(서버는 임시 이름으로 저장하므로 ID 는 이 이름으로 만든다)."""
+    """문제 제목 기준으로 나눈다. 목차에도 같은 제목이 있으므로, 같은 ID가 여러 번 나오면 본문이 가장 긴 것을 쓴다."""
     for pid, page, body, _imgs in sections_with_images(path, id_re, label, with_images=False):
         yield pid, page, body
 
@@ -548,8 +537,7 @@ def lossy_lines(text):
 
 
 def sections_with_images(path, id_re=None, label=None, with_images=True):
-    """sections 와 같지만 (문제ID, 쪽, 본문, 그림목록) 을 돌려준다. 그림목록은 본문의 [이미지] 와 같은 순서의 그림 파일(바이트, 못 꺼냈으면 None)이다.
-    워드·한글이 아니거나 그림 수가 맞지 않으면 빈 목록."""
+    """sections 와 같지만 (문제ID, 쪽, 본문, 그림목록) 을 돌려준다. 그림목록은 본문의 [이미지] 와 같은 순서의 그림 파일(바이트, 못 꺼냈으면 None)이다."""
     imgs = [] if with_images else None
     pdf_img_pages = pdf_image_pages(path) if with_images and path.lower().endswith(".pdf") else set()
     txt = read_text(path, imgs)
@@ -585,8 +573,7 @@ LANG_SIGNS = (("java", r"System\.out|public\s+static\s+void\s+main|\bScanner\s*\
 
 
 def language_hint(body):
-    """문제지 글에서 프로그래밍 언어를 추정한다. 가장 많이 나타나는 언어(최소 2번)를 돌려주고, 불분명하면 None.
-    AI 가 정답코드의 언어를 엉뚱하게 고르는 것을 막는 참고 정보로만 쓴다."""
+    """문제지 글에서 프로그래밍 언어를 추정한다. 가장 많이 나타나는 언어(최소 2번)를 돌려주고, 불분명하면 None."""
     counts = {lang: len(re.findall(rx, body)) for lang, rx in LANG_SIGNS}
     if counts["cpp"] and counts["c"] and not re.search(r"#include\s*<stdio\.h>", body): counts["c"] = 0       # printf 는 C++ 에서도 쓴다
     lang, n = max(counts.items(), key=lambda kv: kv[1])
@@ -601,7 +588,7 @@ def intake(body):
     methods = sorted(set(re.sub(r"\s", "", x) for x in METHOD_RE.findall(body)))
     n_ex = len(set(re.findall(r"입력\s*(\d)", body))) or len(re.findall(r"입출력\s*예", body))
     blank = bool(BLANK_RE.search(body))
-    code = bool(re.search(r"#include|def |print\(|printf|int main|for\s*\w+\s+in\s|for\s*\(|\bclass\s+\w+\s*[:{(]|\b(public|private|protected)\s*:", body))
+    code = has_code(body)
     link = bool(re.search(r"https?://(?!(?:www\.)?(?:trinket\.io|replit\.com|colab\.research\.google\.com|onlinegdb\.com|jdoodle\.com|programiz\.com|pythontutor\.com)\b)|\.mp4", body))      # 실행환경 링크는 제외
     n_img = body.count(IMG_MARK)
     if n_img: notes.append(f"그림 {n_img}개가 있음(내용은 텍스트로 읽히지 않음) → 실행 결과·그림이 이미지로만 있는지 확인 필요")

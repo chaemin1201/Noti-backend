@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""프로토콜 출력 검사기.
-
-사용법:  python protocol_check.py <결과.jsonl> [--skip-exec]
-입력(JSONL, 한 줄에 문제 하나):
-  {"id": "PY11-0004",
-   "payload": {...API 로 보낼 문제...},          # 보류 문제는 null
-   "review":  {"상태": "등록가능", "보류사유": null, "생성내역": {...}, "확인필요": [...]},
-   "expect":  {"snippets": [...], "flags": [...], "status": "PASS"}}   # expect 는 선택
-검사 항목:
-  schema   payload 가 API 스키마(schemas.py)를 통과하는가
-  cond     조건이 "[필수]/[금지]/[허용]/[출력형식] 내용" 형식의 문자열인가
-  exec     정답 코드를 테스트 케이스 입력으로 실행했을 때 예상 출력과 같은가 (python, gcc/g++ 있으면 c/cpp)
-  snippets 원문에서 가져와야 하는 조각이 description 에 그대로 있는가 (원문 보존)
-  flags    확인필요에 반드시 올라와야 하는 항목이 있는가 (함정 문제 대응)
-  hold     보류 문제는 payload 가 없고 사유가 있는가
-  md       description/조건에 마크다운 기호(**)가 남아 있지 않은가
-  src      (원본조각이 있을 때) 설명이 원본 문장 그대로인가
-  dup      같은 배치 안에 중복 문제가 없는가
-결과: PASS / WARN(사람이 볼 것) / FAIL.  expect.status 가 있으면 그 결과와 일치하는지도 확인한다.
-"""
+"""프로토콜 출력 검사기."""
 import json, os, re, shutil, subprocess, sys, tempfile
 import logging
 from pydantic import ValidationError
@@ -57,9 +38,7 @@ def norm_out(s):
 
 
 def _limits(managed_runtime=False):
-    """자식 프로세스 제한 (POSIX). 시간 5초, 메모리 512MB, 파일 쓰기 1MB, 프로세스 새로 만들기 금지.
-    managed_runtime=True(Java·node): JVM·V8 은 스레드와 큰 가상 메모리를 쓰므로 메모리·프로세스 수 제한은 걸지 않고
-    (메모리는 실행 옵션 -Xmx / --max-old-space-size 로 제한), 시간 15초와 파일 쓰기 1MB 만 건다. 격리는 컨테이너가 맡는다."""
+    """자식 프로세스 제한 (POSIX). 시간 5초, 메모리 512MB, 파일 쓰기 1MB, 프로세스 새로 만들기 금지."""
     try:
         import resource
         resource.setrlimit(resource.RLIMIT_CPU, ((15, 15) if managed_runtime else (5, 5)))
@@ -112,8 +91,7 @@ _C_FILE_READ_RE = re.compile(r'#\s*(?:include|include_next|import)\s*(?:"|<\s*(?
 
 
 def _net_prefix():
-    """실행 명령 앞에 붙일 '네트워크 차단' 접두어. 차단이 필요한데 할 수 없으면 None (실행 금지).
-    INTAKE_EXEC_NO_NET=off 면 차단하지 않는다(컨테이너가 이미 막은 경우에만)."""
+    """실행 명령 앞에 붙일 '네트워크 차단' 접두어. 차단이 필요한데 할 수 없으면 None (실행 금지)."""
     global _NETNS
     try:
         from .. import config
@@ -159,8 +137,7 @@ def _run_killing_tree(cmd, stdin_bytes, timeout, **kw):
 
 
 def run_code(language, code, stdin, timeout=5):
-    """(결과, 메시지, 경고). 결과: 'ok' | 'skip' | 'error'
-    주의: AI 가 쓴 코드를 실제로 실행한다. 서버에서는 INTAKE_EXEC=on 일 때만 호출하고, 가능하면 격리된 작업 서버/컨테이너에서 켠다."""
+    """(결과, 메시지, 경고). 결과: 'ok' | 'skip' | 'error'"""
     posix = os.name == "posix"
     kw = dict(preexec_fn=_limits) if posix else {}
     net = _net_prefix()
@@ -222,8 +199,7 @@ def run_code(language, code, stdin, timeout=5):
 
 
 def answer_leak_reason(payload):
-    """설명에 정답이 그대로 들어 있을 수 있으면 승인 이유 문장을, 아니면 None. 학생에게 정답이 보이면 안 되므로 사람이 확인하게 한다.
-    코딩·디버깅: 제공 코드가 아닌 정답 코드 줄이 3줄 이상 설명에 있을 때. 단답형·주관식: 정답 글(4글자 이상)이 설명에 그대로 있을 때."""
+    """설명에 정답이 그대로 들어 있을 수 있으면 승인 이유 문장을, 아니면 None. 학생에게 정답이 보이면 안 되므로 사람이 확인하게 한다."""
     p = payload or {}
     desc = str(p.get("description") or "")
     if not desc: return None

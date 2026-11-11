@@ -96,7 +96,11 @@ def _original_records(prob_paths, sol_paths, id_re, names, split=True):
             rec = {"입력종류": "원본", "원본형식": fmt, "key": key, "id": key, "page": page, "원본조각": text, "intake": pdf_intake.intake(text)}
             if langs.get(pid): rec["intake"]["언어힌트"] = langs[pid]
             memo = list(rec["intake"].get("메모") or [])
-            if len(parts) > 1: memo.append(f"한 문제 안의 코드 작성·수정 소문항 {len(parts)}개를 문제 {len(parts)}개로 나눔 (공통 설명·제공 코드는 모두에 붙임)")
+            if len(parts) > 1:
+                memo.append(f"한 문제 안의 코드 작성·수정 소문항 {len(parts)}개를 문제 {len(parts)}개로 나눔 (공통 설명·제공 코드는 모두에 붙임)")
+                if not method:                                    # 코드를 쓰게 하는 소문항이므로 서버가 유형을 확정한다: 주어진 코드가 있으면 디버깅(제공 코드를 완성), 없으면 코딩
+                    rec["intake"]["유형힌트"] = "디버깅" if pdf_intake.has_code(text) else "코딩"
+                    rec["intake"]["유형확정"] = True
             if method:
                 rec["방식분할"] = method
                 memo.append(f"풀이 방식이 {n_methods}개라 서버가 문제 {n_methods}개로 나눔: 이 문제는 '{method}' 만 요구함 (분할하지 말고 이 방식 문제 하나만 출력, 다른 방식 안내와 '모두 작성'은 설명에서 뺌, 조건에 [필수] {method})")
@@ -116,8 +120,7 @@ def _original_records(prob_paths, sol_paths, id_re, names, split=True):
 
 
 def _scan_records(paths, names, budget):
-    """스캔 PDF(글 층 없음): 쪽을 그림으로 만들어 몇 쪽씩 묶어 레코드 하나로 보낸다. AI 가 그림을 읽어 문제를 찾고 나눈다 (문서 전체 방식).
-    그림을 만들지 못하면 그림 없는 레코드를 만들어 보류로 남기고(사람이 그림·내용을 넣게), 이유를 메모로 적는다."""
+    """스캔 PDF(글 층 없음): 쪽을 그림으로 만들어 몇 쪽씩 묶어 레코드 하나로 보낸다. AI 가 그림을 읽어 문제를 찾고 나눈다 (문서 전체 방식)."""
     out = []
     for path in paths:
         label = names.get(path) or path
@@ -172,9 +175,7 @@ _PII_TOKENS = (re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+"),                     
 
 
 def redact_text(text, labels=True):
-    """AI 서비스로 보내기 전에 개인정보를 지운다. (지운 글, 지운 곳 수).
-    labels=True(문서): '학번 :' 뒤의 줄 끝까지, '성명·학과·소속·제출자·작성자 :' 로 시작하는 줄을 지운다. '이름' 은 문제 속 낱말과 구분할 수 없어 학번 줄 안에서만 지운다.
-    labels=False(엑셀·DB 값): 문제 이름 열 같은 값은 지우지 않도록 전화번호·이메일·주민등록번호만 지운다."""
+    """AI 서비스로 보내기 전에 개인정보를 지운다. (지운 글, 지운 곳 수)."""
     if not isinstance(text, str) or not text: return text, 0
     n = 0
     if labels:
@@ -213,10 +214,7 @@ def build_records(table_path=None, original_paths=(), pattern=None, labels=None,
 
 
 def _build_records(table_path, original_paths, pattern, labels, table_labels, tmp):
-    """(입력종류, 레코드 목록). 표 → 엑셀 입력, 글 → 원본 입력, 둘 다 있으면 대조 결과를 붙인다.
-    table_path: 표 파일 하나(문자열) 또는 여러 개(목록). 여러 개면 모든 표의 문제를 합쳐 처리한다. table_labels: 표 파일의 올린 이름.
-    엑셀과 같은 문제 ID 가 없는 원본 파일은 엑셀과 별개의 문제지이므로 독립된 원본 입력으로 함께 처리한다(여러 형식의 문제지를 한 번에 올리는 경우).
-    labels: 원본 파일의 표시 이름(같은 순서). '풀이·정답' 이 들어간 파일은 정답 자료로 따로 붙인다."""
+    """(입력종류, 레코드 목록). 표 → 엑셀 입력, 글 → 원본 입력, 둘 다 있으면 대조 결과를 붙인다."""
     original_paths = list(original_paths)
     labels = list(labels) if labels else [""] * len(original_paths)
     tables = [table_path] if isinstance(table_path, (str, os.PathLike)) else [p for p in (table_path or []) if p]
@@ -391,18 +389,6 @@ def user_text(rec, mode="none"):
 
 # ====================================================================================================
 # 엑셀과 원본 문제지 대조
-# 엑셀(데이터화)과 원본 문제지(PDF)를 문제별로 대조해 불일치를 찾는다.
-#
-# 각 문제에 대해 다음을 확인한다 (모두 규칙 기반 점검이며, 판단은 AI/사람이 한다).
-#   desc     엑셀 설명의 각 줄이 원본에 있는가 (공백·따옴표·글머리표 차이는 무시)
-#   out      엑셀 출력이 원본에 있는가
-#   cond     엑셀 조건의 각 줄이 원본에 있는가
-#   method   원본에 방법1/풀이1/택1 같은 방식 안내가 있는데 엑셀에는 없는가
-#   multi    원본에 입출력 예가 여러 개 있는데 엑셀에는 한 칸뿐인가
-#   link     원본에 링크·영상이 있는가
-#   name     이름은 A 인데 내용은 다른 문제와 일치하는가 (이름 밀림)
-#   noname   엑셀 이름이 원본에 없는가 / 원본이 이미지라 텍스트가 없는가
-# 결과: OK / 확인(경미) / 불일치(사람 확인)
 # ====================================================================================================
 
 ID_RE = re.compile(r"문제\s+([A-Z]{1,3}\d{2,3}-\d{4})")
@@ -440,8 +426,7 @@ def lines_of(text):
 
 
 def pdf_sections(paths, fmts=None):
-    """원본(PDF·워드·텍스트)을 문제 ID 별 본문으로 나눈다. 같은 ID 가 여러 파일에 있으면 이어 붙인다.
-    fmts 에 dict 를 넘기면 문제 ID → 처음 나온 파일의 형식(pdf_intake.format_of)을 채운다."""
+    """원본(PDF·워드·텍스트)을 문제 ID 별 본문으로 나눈다. 같은 ID 가 여러 파일에 있으면 이어 붙인다."""
     sec = {}
     for p in paths:
         txt = pdf_intake.read_text(p)
